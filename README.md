@@ -1,4 +1,4 @@
-# Leslie MIDI Relay
+# Hammond Leslie MIDI Relay
 
 (c) Kamil Barański kamilbaranski.com
  
