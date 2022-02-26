@@ -1,19 +1,8 @@
 /**
  * 
- * Leslie MIDI relay v. 1.0
+ * Hammond Leslie MIDI relay v. 1.0
  * (c) Kamil Baranski 20220222;
  * kamilbaranski.com
- * 
- * ESP8266 / NodeMCU v3.
- * 
- * Connect MIDI input to D7 (GPIO13).
- * Connect relays controls to D5 (GPIO14) & D6 (GPIO12).
- * 
- * Check the great https://www.notesandvolts.com/2015/02/midi-and-arduino-build-midi-input.html for the proper MIDI In schematics.
- * 
- * Additional libraries:
- * - EspSoftwareSerial (https://www.arduino.cc/reference/en/libraries/espsoftwareserial/)
- * - MIDI Library (https://www.arduino.cc/reference/en/libraries/midi-library/)
  * 
  */
 
@@ -62,7 +51,7 @@ void setup() {
   // we don't use first serial port (USB) if we don't need to.
   if (serialDebug) {
     Serial.begin(115200);   // 9600 feels to slow.
-    Serial.println("Leslie MIDI relay.");
+    Serial.println("Hammond Leslie MIDI relay.");
 
     if (!myPort) {
       // If the object did not initialize, then its configuration is invalid
