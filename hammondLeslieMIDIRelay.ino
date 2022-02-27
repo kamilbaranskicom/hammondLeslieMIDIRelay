@@ -1,29 +1,46 @@
 /**
 
-   Hammond Leslie MIDI relay v. 2.0
-   (c) Kamil Baranski 20220226;
+   Hammond Leslie MIDI relay v. 2.5
+   (c) Kamil Baranski 20220227;
    kamilbaranski.com
 
 */
+
+
 
 #include <SoftwareSerial.h>
 #include <MIDI.h>
 #include <ESP8266WiFi.h>  // we use it to disable WiFi ;)
 
-// MIDI In goes to GPIO13. We do not need to send anything.
-#define MYPORT_TX 0
-#define MYPORT_RX 13
-SoftwareSerial myPort(MYPORT_RX, MYPORT_TX);
 
-MIDI_CREATE_INSTANCE(SoftwareSerial, myPort, MIDI);
+/**
+   working mode. default: MIDIENABLED + HALFMOONENABLED + AUTODETECTPEDAL.
 
-// relays connected to GPIO14 and GPIO12.
+   enable PITCHBENDCCMODE if you have Pitch Bend and Modulation on the same joystick
+   (this will change speed of the motors as in eg. Kronos; STOP is disabled from MIDI in this mode)
+
+   AUTODETECTPEDAL works OK, it shouldn't be changed.T
+*/
+
+const uint8_t MIDIENABLED = 1;
+const uint8_t HALFMOONENABLED = 2;
+const uint8_t AUTODETECTPEDAL = 4;
+const uint8_t ROLANDPEDAL = 8; // if !AUTODETECTHALFMOON, program will use ROLAND polarity, else will use KURZWEIL_OR_HALFMOON.
+const uint8_t PITCHBENDCCMODE = 16;
+// const uint8_t WORKINGMODE = MIDIENABLED + HALFMOONENABLED + AUTODETECTPEDAL;
+const uint8_t WORKINGMODE = MIDIENABLED + HALFMOONENABLED + AUTODETECTPEDAL + PITCHBENDCCMODE;
+
+// writes debug info on serial port (USB). 115200 bps!
+const bool serialDebug = true;
+
+
+/**
+   relays
+*/
+
+// relays connected to GPIO14 (D5 on NodeMCU v3) and GPIO12 (D6 on NodeMCU v3).
 const uint8_t slowRelayPin = 14; // slow
 const uint8_t fastRelayPin = 12; // fast
-
-// halfmoon or pedal connected to D1 (GPIO5) and D2 (GPIO4).
-const uint8_t slowHalfmoonPin = 5;
-const uint8_t fastHalfmoonPin = 4;
 
 // consts
 const uint8_t STOP = 0;
@@ -35,10 +52,18 @@ const String speeds[4] = { "STOP", "SLOW", "FAST", "DEFAULT" };
 const uint8_t DEFAULTSPEED = SLOW;
 
 
-// STOP means also not connected, so we won't change relays to STOP if there's nothing connected on startup.
+/**
+   halfmoon/pedal
+*/
+
+// halfmoon or pedal connected to GPIO5 (D1 on NodeMCU v3) and GPIO4 (D2 on NodeMCU v3).
+const uint8_t slowHalfmoonPin = 5;
+const uint8_t fastHalfmoonPin = 4;
+
+// STOP usually means also not connected, so we won't change relays to STOP if there's nothing connected on startup.
 // And that's the behaviour we want.
-// TODO: or maybe should we check on startup if we have the pedal which is normally closed?
 uint8_t lastHalfmoonState = STOP;
+
 const uint8_t debouncedButtonsAfter = 20; // ms
 
 const uint8_t UNRECOGNIZED = 0;
@@ -57,9 +82,25 @@ const String pedalTypes[6] = {
 };
 uint8_t pedalType = UNRECOGNIZED;
 
-// 0..5 = stop; 6..64 = slow, 65..127 = fast
-const uint8_t STOPTOVALUE = 5;
+
+/**
+   MIDI
+*/
+
+// MIDI In goes to GPIO13 (D7 on NodeMCU v3). We do not need to send anything, so TX=0.
+#define MYPORT_TX 0
+#define MYPORT_RX 13
+SoftwareSerial myPort(MYPORT_RX, MYPORT_TX);
+
+MIDI_CREATE_INSTANCE(SoftwareSerial, myPort, MIDI);
+
+// 0..5 = stop; 6..64 = slow, 65..127 = fast;
+const uint8_t STOPBELOWVALUE = 6;
 const uint8_t SLOWTOVALUE = 64;
+
+// we use it for PITCHBENDCCMODE
+uint8_t previousCCValue = 0;
+uint8_t currentRelaysState = STOP;
 
 // what CC#? #1 = modulation
 const uint8_t CCNUMBER = 1;
@@ -67,43 +108,56 @@ const uint8_t CCNUMBER = 1;
 // which channel to listen to? MIDI_CHANNEL_OMNI listens to all.
 const uint8_t CHANNEL = MIDI_CHANNEL_OMNI;
 
-// writes info about CCs on serial port (USB). 115200 bps!
-const bool serialDebug = false;
-
 void setup() {
   WiFi.mode(WIFI_OFF);
 
   // software serial port. not sure if this line is correct/needed (MIDI standard is 31.25 kbit/s). But the program works ;)
   myPort.begin(38400, SWSERIAL_8N1, MYPORT_RX, MYPORT_TX, false);
 
+
   // we don't use first serial port (USB) if we don't need to.
   if (serialDebug) {
     Serial.begin(115200);   // 9600 feels to slow.
-    Serial.println("\n\nHammond Leslie MIDI relay.\n");
+  }
+  debugMessage("\n\nHammond Leslie MIDI relay.\n");
 
-    if (!myPort) {
-      // If the object did not initialize, then its configuration is invalid
-      Serial.println("Invalid SoftwareSerial pin configuration, check config");
-    }
+  if (!myPort) {
+    // If the object did not initialize, then its configuration is invalid
+    debugMessage("Invalid SoftwareSerial pin configuration, check config");
   }
 
-  pinMode(slowHalfmoonPin, INPUT);
-  pinMode(fastHalfmoonPin, INPUT);
+  setPinModes();
 
   pedalType = checkPedalType(true);
-
-  pinMode(slowRelayPin, OUTPUT);
-  pinMode(fastRelayPin, OUTPUT);
 
   setRelays(DEFA);
 
   MIDI.setHandleControlChange(handleControlChange);
   MIDI.begin(CHANNEL);
+
+}
+
+void setPinModes() {
+  pinMode(slowHalfmoonPin, INPUT);
+  pinMode(fastHalfmoonPin, INPUT);
+
+  pinMode(slowRelayPin, OUTPUT);
+  pinMode(fastRelayPin, OUTPUT);
 }
 
 uint8_t checkPedalType(bool boottime) {
   uint8_t newPedalType = pedalType;
-  
+  if (WORKINGMODE && !AUTODETECTPEDAL) {
+    if (WORKINGMODE && ROLAND) {
+      newPedalType = ROLAND;
+    } else {
+      newPedalType = KURZWEIL_OR_HALFMOON;
+    }
+    if (boottime) {
+      debugMessage("Pedal type set to: " + pedalTypes[newPedalType] + ". Autodetection is off.");
+    }
+  }
+
   if (digitalRead(slowHalfmoonPin) && digitalRead(fastHalfmoonPin)) { // slow & fast pressed; means we have a Roland/Yamaha/Nord pedal here.
     if (boottime) {
       newPedalType = ROLAND;
@@ -148,14 +202,17 @@ uint8_t checkPedalType(bool boottime) {
       }
     }
   }
-  
+
   if (newPedalType != pedalType) {
-    Serial.println("Detected: " + pedalTypes[newPedalType] );
+    debugMessage("Detected: " + pedalTypes[newPedalType] );
   }
   return newPedalType;
 }
 
 void handleHalfmoon() {
+  if (WORKINGMODE && !HALFMOONENABLED) {
+    return;
+  }
   uint8_t newSpeed = getHalfmoonSpeed();
   if (newSpeed != lastHalfmoonState) {
     // the position has been changed, but hey, let's wait a moment and check once more.
@@ -163,7 +220,7 @@ void handleHalfmoon() {
     if (newSpeed == getHalfmoonSpeed()) {
       // still the position is changed :)
       if (serialDebug) {
-        Serial.println("Halfmoon/pedal turns " + speeds[newSpeed] + ".");
+        debugMessage("Halfmoon/pedal turns " + speeds[newSpeed] + ".");
       }
       setRelays(newSpeed);
       lastHalfmoonState = newSpeed;
@@ -210,18 +267,36 @@ uint8_t getHalfmoonSpeed() {
 
 void handleControlChange(byte inChannel, byte inNumber, byte inValue) {
   uint8_t newSpeed;
+  if (WORKINGMODE && !MIDIENABLED) {
+    return;
+  }
   // we don't check inChannel, as we'll be here only if the channel is right.
   if (inNumber == CCNUMBER) { // cc#01 = modulation
-    if (inValue <= STOPTOVALUE) {
-      newSpeed = STOP;
-    } else if (inValue <= SLOWTOVALUE) {
-      newSpeed = SLOW;
-    } else {
-      newSpeed = FAST;
+    if (WORKINGMODE && PITCHBENDCCMODE) { // joystick (eg. Kronos) mode
+      if ((inValue > SLOWTOVALUE) && (previousCCValue <= SLOWTOVALUE)) {
+        // we've just passed the SLOWTOVALUE; let's change speed!
+        if (currentRelaysState == FAST) {
+          newSpeed = SLOW;
+        } else {
+          newSpeed = FAST;
+        }
+      } else {
+        // naah, don't change.
+        newSpeed = currentRelaysState;
+      }
+      previousCCValue = inValue;
+    } else { // } else if (workingMode && !PITCHBENDCCMODE) {
+      if (inValue < STOPBELOWVALUE) {  // "<" not "<=", because some users may want 0 as slow (in this case STOPTOVALUE=SLOWTOVALUE=0).
+        newSpeed = STOP;
+      } else if (inValue <= SLOWTOVALUE) {
+        newSpeed = SLOW;
+      } else {
+        newSpeed = FAST;
+      }
     }
     setRelays(newSpeed);
     if (serialDebug) {
-      Serial.println((String)"ch" + (String)inChannel + (String)" CC#" + (String)inNumber + (String)" " + (String)inValue + "; setting relays to " + speeds[newSpeed] + ".");
+      debugMessage((String)"ch" + (String)inChannel + (String)" CC#" + (String)inNumber + (String)" " + (String)inValue + "; setting relays to " + speeds[newSpeed] + ".");
     }
   }
 }
@@ -240,9 +315,16 @@ void setRelays(uint8_t newSpeed) {
     digitalWrite(slowRelayPin, !LOW);
     digitalWrite(fastRelayPin, !HIGH);
   }
+  currentRelaysState = newSpeed;
 }
 
 void loop() {
   MIDI.read();
   handleHalfmoon();
+}
+
+void debugMessage(String message) {
+  if (serialDebug) {
+    Serial.println(message);
+  }
 }
