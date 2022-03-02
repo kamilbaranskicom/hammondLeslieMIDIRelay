@@ -6,7 +6,8 @@
 - Relay for the Leslie motors. Can be installed inside the Leslie.
 - Allows Leslie motor speed control with MIDI CC#01, halfmoon or sustain pedal.
 - Tries to guess the type of the pedal/halfmoon on the fly, but in some cases you'll need to reboot. <small>(Don't press the pedal when booting, turn the halfmoon to slow or stop!)</small>
-- You can also use "Pitch Bend CC mode" to change motor speed with PB/Modulation joystick (like in eg. Kronos).
+- "Pitch Bend CC mode" for changing motor speed with PB/Modulation joystick (like in eg. Kronos).
+- "Pedal switch mode" for changing motor speed alternately (slow; pressed = stop; released: fast; pressed = stop; released: slow).
 
 ## HARDWARE
 - ESP8266 / NodeMCU v3.
