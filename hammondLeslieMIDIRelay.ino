@@ -1,6 +1,6 @@
 const String PROGRAMNAME = "Hammond Leslie MIDI relay";
-const String PROGRAMVERSION = "3.0";
-const String PROGRAMDATE = "20220302";
+const String PROGRAMVERSION = "3.01";
+const String PROGRAMDATE = "20220303";
 const String PROGRAMAUTHOR = "(c) Kamil Baranski";
 const String PROGRAMWWW = "kamilbaranski.com";
 
@@ -42,8 +42,7 @@ const bool serialDebug = true;
 
 // you might temporarily turn on/off debugMore if you send a Note On/Off.
 bool debugMore = false;
-uint8_t magicDebugValue;
-const unsigned long slowerTheProgramMs = 0; // use ~50 for halfmoon debugMore ;)
+const unsigned long slowerTheHalfmoonMs = 0; // use ~50 for halfmoon debugMore ;)
 unsigned long previousMillis = 0;
 
 
@@ -64,6 +63,11 @@ const uint8_t ERRORSPEED = 4;
 const String speeds[5] = { "STOP", "SLOW", "FAST", "DEFAULT", "ERROR" };
 // what speed to set after boot?
 const uint8_t DEFAULTSPEED = SLOW;
+
+struct speedWithReason {
+  uint8_t speed;
+  uint8_t reason;
+};
 
 // we use it for PITCHBENDCCMODE & PEDALSWITCHMODE
 uint8_t currentRelaysState = STOP;
@@ -211,18 +215,18 @@ uint8_t checkPedalType(bool boottime) {
     newPedalType = autodetectPedalType(boottime);
     debugMessage("autodetectPedalType() = " + (String) newPedalType, true);
     return newPedalType;
+  };
+
+  // autodetection turned off.
+  if (WORKINGMODE && ROLAND) {
+    newPedalType = ROLAND;
   } else {
-    // autodetection turned off.
-    if (WORKINGMODE && ROLAND) {
-      newPedalType = ROLAND;
-    } else {
-      newPedalType = KURZWEIL_OR_HALFMOON;
-    }
-    if (boottime) {
-      debugMessage("Pedal type set to: " + pedalTypes[newPedalType] + ". Autodetection is off.");
-    }
-    return newPedalType;
+    newPedalType = KURZWEIL_OR_HALFMOON;
   }
+  if (boottime) {
+    debugMessage("Pedal type set to: " + pedalTypes[newPedalType] + ". Autodetection is off.");
+  }
+  return newPedalType;
 }
 
 uint8_t autodetectPedalType(bool boottime) {
@@ -284,25 +288,25 @@ void handleHalfmoon() {
   if (!(WORKINGMODE && HALFMOONENABLED)) {
     return;
   }
-  uint8_t newSpeed = getWantedHalfmoonState();
-  debugMessage("getWantedHalfmoonState(newSpeed) = " + (String)newSpeed + "; magicDebugValue = " + (String)magicDebugValue, true);
-  if (newSpeed != lastHalfmoonState) {
+  speedWithReason newSpeed = getWantedHalfmoonState();
+  debugMessage("getWantedHalfmoonState(newSpeed) = " + (String)newSpeed.speed + "; reason = " + (String)newSpeed.reason, true);
+  if (newSpeed.speed != lastHalfmoonState) {
     // the position has been changed, but hey, let's wait a moment and check once more.
     delay(debouncedButtonsAfter);
-    uint8_t newSpeed2 = getWantedHalfmoonState();
-    debugMessage("getWantedHalfmoonState(newSpeed2) = " + (String)newSpeed2 + "; magicDebugValue = " + (String)magicDebugValue, true);
-    if (newSpeed == newSpeed2) {
+    speedWithReason newSpeed2 = getWantedHalfmoonState();
+    debugMessage("getWantedHalfmoonState(newSpeed2) = " + (String)newSpeed2.speed + "; reason = " + (String)newSpeed2.reason, true);
+    if (newSpeed.speed == newSpeed2.speed) {
       // still the position is changed :)
       if (WORKINGMODE && PEDALSWITCHMODE) {
-        if (newSpeed == STOP) {
+        if (newSpeed.speed == STOP) {
           pedalPressedDuringSwitchMode = true;
         } else {
           pedalPressedDuringSwitchMode = false;
         }
       }
-      debugMessage(halfmoonOrPedal(pedalType) + " turns " + speeds[newSpeed] + ".");
-      setRelays(newSpeed);
-      lastHalfmoonState = newSpeed;
+      debugMessage(halfmoonOrPedal(pedalType) + " turns " + speeds[newSpeed.speed] + ".");
+      setRelays(newSpeed.speed);
+      lastHalfmoonState = newSpeed.speed;
     }
     // let's check if something has changed :)
     pedalType = checkPedalType(false);
@@ -319,7 +323,7 @@ String halfmoonOrPedal(uint8_t pedalType) {
   }
 }
 
-uint8_t getWantedHalfmoonState() {
+speedWithReason getWantedHalfmoonState() {
   bool slowHalfmoonState = digitalRead(slowHalfmoonPin);
   bool fastHalfmoonState = digitalRead(fastHalfmoonPin);
   if (slowHalfmoonState && fastHalfmoonState) {
@@ -328,106 +332,84 @@ uint8_t getWantedHalfmoonState() {
       if (WORKINGMODE && PEDALSWITCHMODE) {
         if (pedalPressedDuringSwitchMode) {
           // we had a pressed pedal, so release should it change the speed to the oposite.
-          magicDebugValue = 1;
-          return getTheOtherSpeed(lastRelaysStateExcludingStop);
+          return {getTheOtherSpeed(lastRelaysStateExcludingStop), 1};
         } else {
           // the pedal hasn't been pressed and isn't pressed now.
-          magicDebugValue = 2;
-          return lastRelaysStateExcludingStop;
+          return {lastRelaysStateExcludingStop, 2};
         }
       } else {
-        magicDebugValue = 3;
-        return SLOW;
+        return {SLOW, 3};
       }
     } else if (pedalType == HALFMOON_OR_NOTHING) {
       // this means some pedal has been connected. We don't know what pedal is this.
       // can we change to slow??
       // HALFMOON OR NOTHING means we cannot use PEDALSWITCHMODE.
-      magicDebugValue = 4;
-      return SLOW;
+      return {SLOW, 4};
     } else {
       if (WORKINGMODE && PEDALSWITCHMODE) {
         // pressed pedal
-        magicDebugValue = 5;
-        return STOP;
+        return {STOP, 5};
       } else {
-        magicDebugValue = 6;
-        return FAST;
+        return {FAST, 6};
       }
     }
   } else if (slowHalfmoonState) {
     if (pedalType == HALFMOON) {
       // we need to check this, else on PEDALSWITCHMODE when user connects halfmoon we might get a disco.
-      magicDebugValue = 7;
-      return SLOW;
+      return {SLOW, 7};
     }
     if (WORKINGMODE && PEDALSWITCHMODE) {
       if (pedalPressedDuringSwitchMode) {
-        magicDebugValue = 8;
-        return getTheOtherSpeed(lastRelaysStateExcludingStop);
+        return {getTheOtherSpeed(lastRelaysStateExcludingStop), 8};
       } else {
-        magicDebugValue = 9;
-        return STOP;
+        return {STOP, 9};
       }
     }
-    magicDebugValue = 10;
-    return SLOW;
+    return {SLOW, 10};
   } else if (fastHalfmoonState) {
     if (WORKINGMODE && PEDALSWITCHMODE) {
       if ((pedalType == KURZWEIL) || (pedalType == KURZWEIL_OR_HALFMOON)) {
         if (pedalPressedDuringSwitchMode) {
-          magicDebugValue = 11;
-          return getTheOtherSpeed(lastRelaysStateExcludingStop);
+          return {getTheOtherSpeed(lastRelaysStateExcludingStop), 11};
         } else {
-          magicDebugValue = 12;
-          return lastRelaysStateExcludingStop;
+          return {lastRelaysStateExcludingStop, 12};
         }
       } else {
         if (pedalType == HALFMOON) {
-          magicDebugValue = 13;
-          return FAST;
+          return {FAST, 13};
         } else {
           // pressed Roland pedal
-          magicDebugValue = 14;
-          return STOP;
+          return {STOP, 14};
         }
       }
     } else {
       if ((pedalType == KURZWEIL) || (pedalType == KURZWEIL_OR_HALFMOON)) {
-        magicDebugValue = 15;
-        return SLOW;
+        return {SLOW, 15};
       } else {
-        magicDebugValue = 16;
-        return FAST;
+        return {FAST, 16};
       }
     }
   } else {  // (slowHalfMoonState || fastHalfmoonState) == 0
     if (WORKINGMODE && PEDALSWITCHMODE) {
       if (pedalType == HALFMOON) {
-        magicDebugValue = 17;
-        return STOP;
+        return {STOP, 17};
       } else {
         // this happen when the user had removed the pedal!
-        magicDebugValue = 18;
-        return DEFA;
+        return {DEFA, 18};
       }
     } else {
       if ((pedalType == ROLAND) || (pedalType == KURZWEIL)) {
         // we had a pedal, so this means the pedal has been disconnected; go back to DEFA(ult speed)
-        magicDebugValue = 19;
-        return DEFA;
+        return {DEFA, 19};
       } else if ((pedalType == HALFMOON_OR_NOTHING) || (pedalType == UNRECOGNIZED)) {
         // unfortunately we can't set STOP, because on nothing we want DEFA
         // but we may wait for slowState or fastState -> then the pedalType will change and STOP will be possible.
-        magicDebugValue = 20;
-        return DEFA;
+        return {DEFA, 20};
       }
-      magicDebugValue = 21;
-      return STOP;
+      return {STOP, 21};
     }
   }
-  magicDebugValue = 255;
-  return ERRORSPEED;    // just in case we've missed something.
+  return {ERRORSPEED, 255};    // just in case we've missed something.
 }
 
 uint8_t getTheOtherSpeed(uint8_t thisSpeed) {
@@ -439,37 +421,40 @@ uint8_t getTheOtherSpeed(uint8_t thisSpeed) {
 }
 
 void handleControlChange(byte inChannel, byte inNumber, byte inValue) {
-  uint8_t newSpeed;
   if (!(WORKINGMODE && MIDIENABLED)) {
     return;
   }
+
   // we don't check inChannel, as we'll be here only if the channel is right.
-  if (inNumber == CCNUMBER) { // cc#01 = modulation
-    if (WORKINGMODE && PITCHBENDCCMODE) { // joystick (eg. Kronos) mode
-      if ((inValue > SLOWTOVALUE) && (previousCCValue <= SLOWTOVALUE)) {
-        // we've just passed the SLOWTOVALUE; let's change speed!
-        if (currentRelaysState == FAST) {
-          newSpeed = SLOW;
-        } else {
-          newSpeed = FAST;
-        }
-      } else {
-        // naah, don't change.
-        newSpeed = currentRelaysState;
-      }
-      previousCCValue = inValue;
-    } else { // } else if (!(workingMode && PITCHBENDCCMODE)) {
-      if (inValue < STOPBELOWVALUE) {  // "<" not "<=", because some users may want 0 as slow (in this case STOPTOVALUE=SLOWTOVALUE=0).
-        newSpeed = STOP;
-      } else if (inValue <= SLOWTOVALUE) {
+  if (inNumber != CCNUMBER) { // cc#01 = modulation
+    return;
+  }
+
+  uint8_t newSpeed;
+  if (WORKINGMODE && PITCHBENDCCMODE) { // joystick (eg. Kronos) mode
+    if ((inValue > SLOWTOVALUE) && (previousCCValue <= SLOWTOVALUE)) {
+      // we've just passed the SLOWTOVALUE; let's change speed!
+      if (currentRelaysState == FAST) {
         newSpeed = SLOW;
       } else {
         newSpeed = FAST;
       }
+    } else {
+      // naah, don't change.
+      newSpeed = currentRelaysState;
     }
-    setRelays(newSpeed);
-    debugMessage((String)"ch" + (String)inChannel + (String)" CC#" + (String)inNumber + (String)" " + (String)inValue + "; setting relays to " + speeds[newSpeed] + ".");
+    previousCCValue = inValue;
+  } else { // } else if (!(workingMode && PITCHBENDCCMODE)) {
+    if (inValue < STOPBELOWVALUE) {  // "<" not "<=", because some users may want 0 as slow (in this case STOPTOVALUE=SLOWTOVALUE=0).
+      newSpeed = STOP;
+    } else if (inValue <= SLOWTOVALUE) {
+      newSpeed = SLOW;
+    } else {
+      newSpeed = FAST;
+    }
   }
+  setRelays(newSpeed);
+  debugMessage((String)"ch" + (String)inChannel + (String)" CC#" + (String)inNumber + (String)" " + (String)inValue + "; setting relays to " + speeds[newSpeed] + ".");
 }
 
 void setRelays(uint8_t newSpeed) {
